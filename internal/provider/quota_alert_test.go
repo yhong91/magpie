@@ -228,6 +228,38 @@ func TestDueRemindersPoolWeekly(t *testing.T) {
 	}
 }
 
+// a window renewing with an account's longer one spent says nothing: a
+// Devin week used up holds the account, so the day's renewal brings no
+// allowance to spend before the week itself renews later
+func TestDueRemindersLongerWindowSpent(t *testing.T) {
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	soon, later := now.Add(20*time.Hour), now.Add(60*time.Hour)
+	day, week := 24*time.Hour, 7*24*time.Hour
+	devin := func(daily, weekly float64) []SubscriptionQuota {
+		return []SubscriptionQuota{{Provider: "devin", Name: "Devin", User: "u@x.com",
+			Windows: []QuotaWindow{
+				{Name: "1 day", Span: day, Used: daily, ResetsAt: &soon},
+				{Name: "7 days", Span: week, Used: weekly, ResetsAt: &later},
+			}}}
+	}
+	// the week spent, the day renewing under the share: nothing is said —
+	// the day is held by the week, and the week itself is silent by the
+	// reminder's own share rule (little would be lost in it)
+	marks := map[string]alertMark{}
+	if got := dueReminders(devin(0, 100), marks, 72*time.Hour, now); len(got) != 0 {
+		t.Fatalf("week spent: %+v", got)
+	}
+	// the week with room: the day renews and is told of as before
+	if got := dueReminders(devin(10, 40), map[string]alertMark{}, 24*time.Hour, now); len(got) != 1 || got[0].Window != "1 day" {
+		t.Fatalf("week with room: %+v", got)
+	}
+	// the week spent past the reminder's share already says nothing by its
+	// own rule; the day alone is told of when nothing longer holds
+	if got := dueReminders(devin(10, 90), map[string]alertMark{}, 24*time.Hour, now); len(got) != 1 || got[0].Window != "1 day" {
+		t.Fatalf("a longer window under the share holds: %+v", got)
+	}
+}
+
 // the reset reminder (#720): a long window renewing within the hours set
 // with much of it left, once a run; a 5-hour one, a window nearly used up
 // and one renewing later say nothing; resets running out are told too

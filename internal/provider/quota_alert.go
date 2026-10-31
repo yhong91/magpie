@@ -142,10 +142,39 @@ const reminderUnder = 85
 // one renews too often for it to be news.
 const reminderSpan = 24 * time.Hour
 
+// spentLonger says whether ws hold a window fully spent whose span is
+// longer than w's and renews after at: w's renewal then brings no
+// allowance to spend before the longer one itself renews (a Devin week
+// used up holds the account though the day renews at midnight), so it is
+// no news. A longer one with anything left feeds w's renewal, and one
+// renewing at or before at renews with w, so neither holds; one whose
+// renewal is unknown doesn't hold, and w is told of as before. The spent
+// longer one is silent by reminderUnder already; it is the one beside it
+// that would otherwise be told of alone.
+func spentLonger(ws []QuotaWindow, w QuotaWindow, at, now time.Time) bool {
+	for _, o := range ws {
+		if o.Span <= w.Span || o.Used < 100 {
+			continue
+		}
+		when := o.ResetsAt
+		if when == nil && o.ResetSecs > 0 {
+			t := now.Add(time.Duration(o.ResetSecs) * time.Second)
+			when = &t
+		}
+		if when == nil || when.After(at) {
+			return true
+		}
+	}
+	return false
+}
+
 // dueReminders is what the readings qs call for with the reset reminder at
 // lead before a renewal (0 off, #720): a window of a day or more renewing
-// within lead with under reminderUnder percent of it used, and reset
-// credits running out within lead — each once, by the time it renews or
+// within lead with under reminderUnder percent of it used — none of them
+// held by a longer window of the same account being fully spent that
+// renews later (a Devin week used up keeps the day's renewal from being
+// worth knowing) — and reset credits running out within lead — each once,
+// by the time it renews or
 // runs out, kept in marks as the alerts are. A reading that failed, or is
 // one kept from before, says nothing.
 func dueReminders(qs []SubscriptionQuota, marks map[string]alertMark, lead time.Duration, now time.Time) []QuotaAlert {
@@ -176,7 +205,7 @@ func dueReminders(qs []SubscriptionQuota, marks map[string]alertMark, lead time.
 				t := now.Add(time.Duration(w.ResetSecs) * time.Second)
 				at = &t
 			}
-			if at == nil || !due(alertPrefix(q)+"r|"+w.Name+"|"+w.Model, *at) {
+			if at == nil || spentLonger(q.Windows, w, *at, now) || !due(alertPrefix(q)+"r|"+w.Name+"|"+w.Model, *at) {
 				continue
 			}
 			out = append(out, QuotaAlert{Provider: q.Provider, Name: q.Name, User: q.User, Window: w.Name, Used: w.Used, ResetsAt: at, Kind: "renews"})
